@@ -1,0 +1,177 @@
+from flask import Flask, render_template, request, jsonify
+import folium
+import json
+import os
+import osmnx as ox
+import networkx as nx
+from folium.plugins import Draw
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    bike_paths_data = None  
+
+    try:
+        geojson_path = os.path.join(os.getcwd(), 'data/istanbul_bisiklet_yollari.geojson')
+
+        if os.path.exists(geojson_path):
+            with open(geojson_path, encoding='utf-8') as f:
+                bike_paths_data = json.load(f)
+        else:
+            print(f"GeoJSON dosyası bulunamadı: {geojson_path}")
+
+    except Exception as e:
+        print(f"GeoJSON dosyası okunurken hata oluştu: {e}")
+
+    if bike_paths_data is None:
+        bike_paths_data = {}
+
+    # Harita nesnesini oluştur
+    m = folium.Map(location=[41.015137, 28.979530], zoom_start=12)
+    folium.GeoJson(bike_paths_data, name='Bisiklet Yolları').add_to(m)
+    
+    # Nokta koyma aracını ekle
+    Draw(export=True).add_to(m)
+
+    map_html = m._repr_html_()
+    return render_template('index.html', map_html=map_html)
+@app.route('/calculate_route', methods=['POST'])
+def calculate_route():
+    try:
+        print("İstek alındı!")  # Debug için
+        print("Gelen JSON:", request.data)  # Gelen veriyi göster
+
+        data = request.get_json(force=True)
+        print("Çözümlenmiş JSON:", data)  # JSON doğru okunuyor mu?
+
+        if not data or "start" not in data or "end" not in data:
+            print("Eksik veri!")  # Eksikse uyarı ver
+            return jsonify({"error": "Başlangıç ve bitiş noktaları eksik!"}), 400
+
+        start = tuple(data["start"])
+        end = tuple(data["end"])
+        print(f"Başlangıç: {start}, Bitiş: {end}")  # Noktaları kontrol et
+
+        # Rota hesaplama
+        G = ox.graph_from_place("Istanbul, Turkey", network_type="bike")
+        orig_node = ox.nearest_nodes(G, start[1], start[0])
+        dest_node = ox.nearest_nodes(G, end[1], end[0])
+        route = nx.shortest_path(G, orig_node, dest_node, weight="length")
+        route_coords = [(G.nodes[n]['y'], G.nodes[n]['x']) for n in route]
+
+        print("Rota başarıyla hesaplandı!")  # Rota tamamlandıysa yazdır
+        return jsonify({"route": route_coords})
+
+    except Exception as e:
+        print("Hata oluştu:", str(e))  # Hata mesajı
+        return jsonify({"error": f"Rota hesaplanırken hata oluştu: {str(e)}"}), 500
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>İstanbul Bisiklet Rotaları</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+        #map-container {
+            width: 90%;
+            height: 80vh;
+            max-width: 1200px;
+            margin: 20px auto;
+            border: 2px solid #333;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        .leaflet-container {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .button-container {
+            margin-top: 10px;
+        }
+        button {
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            margin: 5px;
+        }
+        .clear-btn { background-color: red; color: white; }
+        .route-btn { background-color: blue; color: white; }
+    </style>
+</head>
+<body>
+    <h1>İstanbul Bisiklet Rotaları</h1>
+    <div id="map-container">
+        {{ map_html | safe }}
+    </div>
+    <div class="button-container">
+        <button class="clear-btn" onclick="clearMap()">Haritayı Temizle</button>
+        <button class="route-btn" onclick="calculateRoute()">Rota Hesapla</button>
+    </div>
+    <script>
+        function clearMap() {
+            location.reload();
+        }
+        function calculateRoute() {
+            if (waypoints.length < 2) {
+                alert("Lütfen başlangıç ve bitiş noktalarını seçin!");
+                return;
+            }
+
+            var start = [waypoints[0].lat, waypoints[0].lng];
+            var end = [waypoints[1].lat, waypoints[1].lng];
+
+            fetch("/calculate_route", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ start: start, end: end })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert("Hata: " + data.error);
+                    return;
+                }
+
+                var routeCoords = data.route;
+                var routePolyline = L.polyline(routeCoords, { color: "red" }).addTo(map);
+                map.fitBounds(routePolyline.getBounds());  // Rota çizildikten sonra haritayı rota sınırlarına göre ayarlıyoruz
+            })
+            .catch(error => {
+                console.error("Rota hesaplanırken hata oluştu:", error);
+            });
+        }
+        
+    </script>
+</body>
+</html>
+
+
+
+     
